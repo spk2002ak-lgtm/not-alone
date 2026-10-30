@@ -1,0 +1,2 @@
+meta-sam-parser==0.0.4
+pillow>=10.0

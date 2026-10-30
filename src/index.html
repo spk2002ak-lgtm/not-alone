@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not Alone — listing kit demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; font-size: 20px; line-height: 1.45;
+         max-width: 900px; margin: 0 auto; padding: 24px; color: #111; }
+  h1 { font-size: 40px; margin: 0 0 4px; }
+  .sub { font-size: 22px; color: #444; margin-bottom: 28px; }
+  .stage { border: 3px solid #111; border-radius: 12px; padding: 20px 24px;
+           margin-bottom: 24px; }
+  .stage h2 { font-size: 28px; margin: 0 0 12px; }
+  .stage img { max-width: 100%; border: 1px solid #ccc; border-radius: 8px; }
+  input[type="text"], textarea { width: 100%; font-size: 20px; padding: 10px;
+    box-sizing: border-box; margin-bottom: 12px; }
+  textarea { min-height: 140px; }
+  button { font-size: 20px; padding: 12px 20px; margin: 0 8px 8px 0;
+           cursor: pointer; border-radius: 8px; }
+  button.primary { background: #111; color: #fff; border: 3px solid #111; }
+  .note { color: #444; font-size: 18px; }
+  .result { background: #f2f2f2; border-radius: 8px; padding: 14px 18px;
+            margin-top: 12px; white-space: pre-wrap; }
+  .verdict-pass { color: #0a6b0a; font-weight: bold; }
+  .verdict-fix { color: #a33a00; font-weight: bold; }
+  .flag { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<h1>Not Alone</h1>
+<div class="sub" id="profile-line">Loading seller profile…</div>
+
+<div class="stage" id="stage1">
+  <h2>1 · Upload a shirt photo</h2>
+  <input type="file" id="photo-input" accept="image/*">
+  <button id="saved-photo">Use saved Hose Water photo</button>
+  <div><img id="photo-preview" alt="Shirt photo preview"></div>
+</div>
+
+<div class="stage" id="stage2">
+  <h2>2 · Cutout preview</h2>
+  <div><img id="cutout-preview" alt="Transparent cutout preview"></div>
+  <button id="saved-cutout">Show saved cutout</button>
+  <button id="live-cut">Cut with SAM (live)</button>
+  <div class="note" id="cutout-note"></div>
+</div>
+
+<div class="stage" id="stage3">
+  <h2>3 · Listing kit</h2>
+  <label>Title<br><input type="text" id="kit-title"></label>
+  <label>Description<br><textarea id="kit-description"></textarea></label>
+  <label>Tags (comma-separated)<br><input type="text" id="kit-tags"></label>
+  <button class="primary" id="load-kit">Load saved kit</button>
+  <button id="draft-kit">Draft with Muse Spark (live)</button>
+  <button id="grade-kit">Grade with verifier (live)</button>
+  <button id="local-kit">Local checks ($0)</button>
+  <div class="result" id="grade-result" hidden></div>
+</div>
+
+<div class="stage" id="stage4">
+  <h2>4 · Save to memory</h2>
+  <button class="primary" id="save-kit">Save kit to memory</button>
+  <div class="result" id="save-result" hidden></div>
+</div>
+
+<p class="note">Demo build: the saved photo, cutout, and kit cost $0. The live
+Draft and Grade buttons call the Meta Model API; local checks never do.</p>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function draftFromForm() {
+  return {
+    title: $('kit-title').value.trim(),
+    description: $('kit-description').value.trim(),
+    tags: $('kit-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+    product: $('kit-title').value.trim()
+  };
+}
+function fillForm(draft) {
+  $('kit-title').value = draft.title || '';
+  $('kit-description').value = draft.description || '';
+  $('kit-tags').value = (draft.tags || []).join(', ');
+}
+function showGrade(el, grade) {
+  el.hidden = false;
+  const cls = grade.verdict === 'PASS' ? 'verdict-pass' : 'verdict-fix';
+  let html = '<span class="' + cls + '">' + grade.verdict + '</span>';
+  if (grade.source) html += ' <span class="note">(' + grade.source + ')</span>';
+  (grade.flags || []).forEach(f => {
+    html += '\n\n<div class="flag"><b>' + f.rule + '</b>\n' + f.evidence
+      + '\nFix: ' + f.fix + '</div>';
+  });
+  if (!(grade.flags || []).length) html += '\n\nNo flags. Ready to ship.';
+  el.innerHTML = html;
+}
+
+async function loadState() {
+  const res = await fetch('/api/state');
+  const state = await res.json();
+  const p = state.profile;
+  $('profile-line').textContent = p
+    ? p.name + ' · ' + (p.niche || '') + ' · ' + (p.platform || '')
+      + ' · ' + (p.shop_url || '')
+    : 'No seller profile found.';
+  $('photo-preview').src = state.photo;
+  $('cutout-preview').src = state.cutout;
+  if (state.draft) fillForm(state.draft);
+  return state;
+}
+
+$('photo-input').addEventListener('change', ev => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { $('photo-preview').src = reader.result; };
+  reader.readAsDataURL(file);
+});
+$('saved-photo').addEventListener('click', () => {
+  $('photo-preview').src = '/demo/photo';
+});
+$('saved-cutout').addEventListener('click', () => {
+  $('cutout-preview').src = '/demo/cutout';
+  $('cutout-note').textContent = 'Saved Day-1 SAM cutout.';
+});
+$('live-cut').addEventListener('click', async () => {
+  $('cutout-note').textContent = 'Cutting with SAM…';
+  const res = await fetch('/api/cutout', {method: 'POST', headers:
+    {'Content-Type': 'application/json'}, body: '{}'});
+  const data = await res.json();
+  if (!data.ok) {
+    $('cutout-note').textContent = data.error || 'Live cut unavailable.';
+    return;
+  }
+  $('cutout-preview').src = data.cutout;
+  $('cutout-note').textContent = 'Live SAM cut: box '
+    + data.box.x1 + ',' + data.box.y1 + '–' + data.box.x2 + ','
+    + data.box.y2 + ' · mask coverage ' + data.coverage + '%.';
+});
+$('load-kit').addEventListener('click', async () => {
+  const state = await loadState();
+  if (!state.draft) alert('No saved kit yet — draft one first.');
+});
+$('draft-kit').addEventListener('click', async () => {
+  const res = await fetch('/api/draft', {method: 'POST', headers:
+    {'Content-Type': 'application/json'}, body: JSON.stringify({
+      product_title: $('kit-title').value.trim() || 'Raised on Hose Water and Neglect',
+      design_notes: ''})});
+  const data = await res.json();
+  if (!data.ok) { alert(data.error || 'Draft failed.'); return; }
+  fillForm(data.draft);
+});
+$('grade-kit').addEventListener('click', async () => {
+  const res = await fetch('/api/grade', {method: 'POST', headers:
+    {'Content-Type': 'application/json'},
+    body: JSON.stringify({draft: draftFromForm()})});
+  const data = await res.json();
+  if (!data.ok) { alert(data.error || 'Grade failed.'); return; }
+  showGrade($('grade-result'), data.grade);
+});
+$('local-kit').addEventListener('click', async () => {
+  const res = await fetch('/api/local-grade', {method: 'POST', headers:
+    {'Content-Type': 'application/json'},
+    body: JSON.stringify({draft: draftFromForm()})});
+  const data = await res.json();
+  showGrade($('grade-result'), data.grade);
+});
+$('save-kit').addEventListener('click', async () => {
+  const res = await fetch('/api/save', {method: 'POST', headers:
+    {'Content-Type': 'application/json'},
+    body: JSON.stringify({draft: draftFromForm()})});
+  const data = await res.json();
+  const el = $('save-result');
+  el.hidden = false;
+  if (!data.ok) { el.textContent = data.error || 'Save failed.'; return; }
+  el.textContent = 'Saved to ' + data.file
+    + '\nGrade: ' + data.grade.verdict + ' (' + data.grade.source + ')'
+    + '\nMemory now holds: ' + data.memory_products.join(', ');
+  showGrade($('grade-result'), data.grade);
+});
+
+loadState();
+</script>
+</body>
+</html>
